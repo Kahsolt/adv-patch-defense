@@ -2,6 +2,7 @@
 
 REM attacks
 git clone https://github.com/Trusted-AI/adversarial-robustness-toolbox
+git clone https://github.com/pralab/ImageNet-Patch
 
 REM defense
 git clone https://github.com/joellliu/SegmentAndComplete

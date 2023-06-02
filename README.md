@@ -16,13 +16,24 @@ Partial result (`limit=256`):
 | Setting | Accuracy | cmdline |
 | :-: | :-: | :-: | :-: |
 | clean   | 96.484% | `python run_adv_patch.py -L 256 -B 32` |
-| attack  | 44.531% | `python run_adv_patch.py -L 256 -B 32 --atk` |
-| attack  | 46.484% | `python run_adv_patch.py -L 256 -B 32 --atk --pgd` |
-| defense |         | `python run_adv_patch.py -L 256 -B 1 --atk --sac --mae` |
-| defense |         | `python run_adv_patch.py -L 256 -B 1 --atk --sac --sac_complete --mae` |
+| attack  | 44.531% | `python run_adv_patch.py -L 256 -B 32 --ap` |
+| attack  | 46.484% | `python run_adv_patch.py -L 256 -B 32 --ap --ap_pgd` |
+| defense |         | `python run_adv_patch.py -L 256 -B 4 --ap --sac --mae` |
+| defense |         | `python run_adv_patch.py -L 256 -B 4 --ap --sac --sac_complete --mae` |
 
 ⚠ For 12G VRAM, max `batch_size` for `attack/defense` is `48/6` separately
-ℹ To make accuracy numbers reproducible without randomness, `--limit` should be dividable by `--batch_size`
+⚠ To defend against `--ip` attack, you must turn on `--sac_complete` because the pre-generated patches are not that PGD-like noisy
+
+⚪ run error trouble shoot
+
+Q: pip package version issues  
+A: assure `timm==0.3.2`, `torch>1.7`; recommend `numpy==1.24.3`, `torch==2.0.1+cu117`, `torchvision==0.15.2+cu117`  
+
+Q: ImportError in site-package `timm`  
+A: modify `timm/models/layers/helper.py:6` to `import collections.abc as container_abcs`  
+
+Q: deprecation numpy error in local `mae` repo  
+A: modify `mae/util/pos_embed.py:56`, change `np.float` to `np.float32`  
 
 
 ### quick start
@@ -31,10 +42,10 @@ Partial result (`limit=256`):
 - download [MAE weights](https://dl.fbaipublicfiles.com/mae/visualize/mae_visualize_vit_large_ganloss.pth) to `repo/mae/models`
 - download test data [ImageNet-1k]()
 - run clean test: `python run_adv_patch.py`
-- run attack test: `python run_adv_patch.py --atk`
+- run attack test: `python run_adv_patch.py --ap` or `python run_adv_patch.py --ip`
 - run defense test
-  - batch: `python run_adv_patch.py -B 16 -L 16 --atk --sac --mae`
-  - all:   `python run_adv_patch.py --atk --sac --mae`
+  - batch: `python run_adv_patch.py -B 16 -L 16 --ap --sac --mae`
+  - all:   `python run_adv_patch.py --ap --sac --mae`
 
 
 pipeline subsitutes:
@@ -42,6 +53,7 @@ pipeline subsitutes:
 ```
 ⚪ adv patch attack
   - AdvPatch (*)
+  - ImageNet-Patch
   - DPatch / Robust-DPatch
   - regioned PGD
   - feature_level_adv
@@ -74,6 +86,8 @@ pipeline subsitutes:
 
 ⚪ patch attack
 
+- ImageNet-Patch: [https://github.com/pralab/ImageNet-Patch](https://github.com/pralab/ImageNet-Patch)
+  - 基于 ImageNet 预制作的 10 类 patch
 - AdvPattern: [https://github.com/whuAdv/AdvPattern](https://github.com/whuAdv/AdvPattern)
   - 攻击行人重识别模型，衣服上贴补丁，不知所云的方法
 - feature_level_adv: [https://github.com/thestephencasper/feature_level_adv](https://github.com/thestephencasper/feature_level_adv)

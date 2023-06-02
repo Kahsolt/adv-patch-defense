@@ -4,6 +4,7 @@ REM attacks
 git clone https://github.com/tongwu2020/phattacks
 git clone https://github.com/Trusted-AI/adversarial-robustness-toolbox
 git clone https://github.com/whuAdv/AdvPattern
+git clone https://github.com/pralab/ImageNet-Patch
 git clone https://github.com/thestephencasper/feature_level_adv
 git clone https://github.com/cleverhans-lab/cleverhans
 git clone https://github.com/fabiobrau/local_gradients_smoothing
