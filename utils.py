@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from torch import Tensor
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 if device == 'cuda':
   torch.backends.cudnn.enabled = True
   torch.backends.cudnn.benchmark = True
