@@ -31,7 +31,7 @@ class ImageNet_1k(Dataset):
     self.base_path = os.path.join(root, 'val')
     self.transform = transform
 
-    fns = [fn for fn in os.listdir(self.base_path)]
+    fns = sorted([fn for fn in os.listdir(self.base_path)])
     fps = [os.path.join(self.base_path, fn) for fn in fns]
     with open(os.path.join(root, 'image_name_to_class_id_and_name.json'), encoding='utf-8') as fh:
       mapping = json.load(fh)
