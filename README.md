@@ -74,6 +74,26 @@ pipeline subsitutes:
   - DDNM (null-space diffusion inpainting)
 ```
 
+### ImageNet-Patch info
+
+```python
+{
+  'patch_size': 50, 
+  'target_names': {
+    804: 'soap dispenser', 
+    513: 'cornet', 
+    923: 'plate', 
+    954: 'banana', 
+    968: 'cup', 
+    878: 'typewriter keyboard', 
+    546: 'electric guitar', 
+    585: 'hair spray', 
+    806: 'sock', 
+    487: 'cellular telephone'}, 
+  'patch_type': 'square', 
+  'input_shape': (3, 224, 224)
+}
+```
 
 ### reference
 
