@@ -108,6 +108,109 @@ def get_mae() -> MaskedAutoencoderViT:
 
   mae.recover_masked = MethodType(recover_masked, mae)
 
+  def ci_random_masking(self:MaskedAutoencoderViT, x, n_splits=4):
+    """ x: [N, L, D], the patch sequence """
+    assert isinstance(n_splits, int) and n_splits >= 2
+
+    # [B=1, L=196=14*14, D=1024]
+    N, L, D = x.shape
+    import math
+    k = math.ceil(L / n_splits)         # masked patch count
+
+    # [B=1, L=196]
+    noise = torch.rand(N, L, device=x.device)  # noise in [0, 1]
+    # [B=1, L=196], sort noise for each sample
+    ids_shuffle = torch.argsort(noise, dim=1)  # ascend: small is keep, large is remove
+    # [B=1, L=196]
+    ids_restore = torch.argsort(ids_shuffle, dim=1)
+
+    # gather all non-overlapping subsets
+    subsets = []
+    for i in range(n_splits):
+      # pick out one subset
+      slicer_L = slice(None), slice(None, k*i)            # leave (k-1)/k untouched
+      slicer_M = slice(None), slice(k*i, k*(i+1))         # mask 1/k patches
+      slicer_R = slice(None), slice(k*(i+1), None)
+      # [B=1, (k-1)/k*L]
+      ids_keep = torch.cat([ids_shuffle[slicer_L], ids_shuffle[slicer_R]], axis=-1)
+      #ids_keep = ids_shuffle[slicer_M]
+      # [B=1, (k-1)/k*L, D=1024]
+      x_masked = torch.gather(x, dim=1, index=ids_keep.unsqueeze(-1).repeat(1, 1, D))
+      # [B, L], generate the binary mask: 0 is keep, 1 is remove
+      mask = torch.zeros([N, L], device=x.device)
+      mask[slicer_M] = 1
+      # unshuffle to get the binary mask
+      mask = torch.gather(mask, dim=1, index=ids_restore)
+      # one split
+      subsets.append((x_masked, mask, k*i))
+
+    # subsets[0][0]: [1, 171/175, 1024], use major to predict minor
+    # subsets[0][1]: [1, 196], non-overlap, sum(subsets[i][1]) == 196
+    # ids_restore:   [1, 196], permutation of range [0, 195]
+    return subsets, ids_restore
+
+  def ci_forward_splitter(self:MaskedAutoencoderViT, x, n_splits):
+    # embed patches
+    x = self.patch_embed(x)
+    # add pos embed w/o cls token
+    x = x + self.pos_embed[:, 1:, :]
+    # masking split n overlapping subsets
+    return self.ci_random_masking(x, n_splits)
+
+  def ci_forward_encoder(self:MaskedAutoencoderViT, x):
+    # append cls token
+    cls_token = self.cls_token + self.pos_embed[:, :1, :]
+    cls_tokens = cls_token.expand(x.shape[0], -1, -1)
+    x = torch.cat((cls_tokens, x), dim=1)
+    # apply Transformer blocks
+    for blk in self.blocks: x = blk(x)
+    return self.norm(x)
+
+  def ci_forward_decoder(self:MaskedAutoencoderViT, x, ids_restore, k):
+    # embed tokens
+    x = self.decoder_embed(x)
+    # append mask tokens to sequence
+    mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
+    x_ = x[:, 1:, :]      # no cls token
+    x_ = torch.cat([x_[:, :k, :], mask_tokens, x_[:, k:, :]], dim=1)
+    x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
+    x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+    # add pos embed
+    x = x + self.decoder_pos_embed
+    # apply Transformer blocks
+    for blk in self.decoder_blocks: x = blk(x)
+    x = self.decoder_norm(x)
+    # predictor projection
+    x = self.decoder_pred(x)
+    # remove cls token
+    return x[:, 1:, :]
+
+  def ci_forward(self:MaskedAutoencoderViT, x, n_splits=4):
+    subsets, ids_restore = self.ci_forward_splitter(x, n_splits)
+
+    preds, masks = [], []
+    for z, mask, k in subsets:
+      latent = self.ci_forward_encoder(z)
+      pred = self.ci_forward_decoder(latent, ids_restore, k)  # [N, L, p*p*3]
+      preds.append(pred)
+      masks.append(mask)
+    return preds, masks
+
+  def cross_infer(self:MaskedAutoencoderViT, x:Tensor, n_split:int=8) -> Tensor:
+    preds, masks = self.ci_forward(x, n_split)
+
+    y = torch.zeros_like(preds[0])
+    for p, m in zip(preds, masks):
+      y = y + p * m.unsqueeze(-1)     # 1 is masked areas for prediction to fill
+    return self.unpatchify(y)
+
+  mae.ci_random_masking   = MethodType(ci_random_masking,   mae)
+  mae.ci_forward_splitter = MethodType(ci_forward_splitter, mae)
+  mae.ci_forward_encoder  = MethodType(ci_forward_encoder,  mae)
+  mae.ci_forward_decoder  = MethodType(ci_forward_decoder,  mae)
+  mae.ci_forward          = MethodType(ci_forward,          mae)
+  mae.cross_infer         = MethodType(cross_infer,         mae)
+
   return mae
 
 def get_ap(args, clf:Module) -> AdversarialPatchPyTorch:
@@ -191,8 +294,7 @@ def get_dfn(args) -> PreprocessorPyTorch:
           if show: imshow_torch(masks, pmasks, title='mask')
           RX = denormalize(mae.recover_masked(normalize(AX), pmasks))
         else:
-          _, y_hat, _ = mae(normalize(AX), args.mae_ratio)
-          RX = denormalize(mae.unpatchify(y_hat))
+          RX = denormalize(mae.cross_infer(normalize(AX), args.mae_split))
         if show: imshow_torch(AX, RX, title='mae')
         AX = RX
       
@@ -260,6 +362,9 @@ def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=N
 
     total += len(pred)
 
+    import gc ; gc.collect()
+    if device == 'cuda': torch.cuda.ipc_collect()
+
     if args.limit > 0 and total >= args.limit: break
 
   return (correct / total).item()
@@ -301,9 +406,9 @@ if __name__ == '__main__':
   parser.add_argument('--sac',          action='store_true', help='enable SAC defense')
   parser.add_argument('--sac_complete', action='store_true', help='enable shape completion')
   # mae (defense)
-  parser.add_argument('--mae',        action='store_true',     help='enable MAE defense')
-  parser.add_argument('--mae_ratio',  default=0.3, type=float, help='if w/o --sac, random mask area ratio')
-  parser.add_argument('--mae_thresh', default=4,   type=int,   help='if w/ --sac, only mask those pathes with bad pixels count exceeding threshold')
+  parser.add_argument('--mae',        action='store_true', help='enable MAE defense')
+  parser.add_argument('--mae_split',  default=4, type=int, help='if w/o --sac, cross infer n_split')
+  parser.add_argument('--mae_thresh', default=4, type=int, help='if w/ --sac, only mask those pathes with bad pixels count exceeding threshold')
   # debug
   parser.add_argument('--show', action='store_true', help='show debug images')
   parser.add_argument('--show_adv', action='store_true', help='show final adv images')
@@ -311,7 +416,7 @@ if __name__ == '__main__':
   args = parser.parse_args()
 
   assert 0.0 < args.ratio < 1.0
-  assert 0.0 < args.mae_ratio < 1.0
+  assert 0 < args.mae_split <= 36
   assert 0 <= args.ip_idx <= 9
   if args.limit > 0: assert args.limit % args.batch_size == 0, '--limit should be dividable by --batch_size'
 
