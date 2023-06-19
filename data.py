@@ -78,12 +78,12 @@ def get_dataloader(name:str, split:str='test', batch_size:int=32) -> DataLoader:
     finally:
       sys.path.pop(0)
 
-def normalize(X:Tensor, dataset:str) -> Tensor:
+def normalize(dataset:str, X:Tensor) -> Tensor:
   ''' NOTE: to insure attack validity, normalization is delayed until model feed '''
   avg, std = DATASET_STATS[dataset]
   return TF.normalize(X, avg, std)       # [B, C, H, W]
 
-def denormalize(X:Tensor, dataset:str) -> Tensor:
+def denormalize(dataset:str, X:Tensor) -> Tensor:
   avg, std = DATASET_STATS[dataset]
   avg = Tensor(list(avg)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)
   std = Tensor(list(std)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)

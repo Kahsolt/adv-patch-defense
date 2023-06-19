@@ -3,8 +3,9 @@
 # Create Time: 2023/04/24 
 
 from time import time
-from types import MethodType
 from argparse import ArgumentParser
+from functools import partial
+from types import MethodType
 
 from tqdm import tqdm
 from torch.nn import Module, CrossEntropyLoss, AvgPool2d
@@ -288,9 +289,9 @@ def get_dfn(args) -> PreprocessorPyTorch:
           pmasks = self.AVG_POOL(masks)
           pmasks = ThresholdSTEFunction.apply(pmasks)
           if show: imshow_torch(masks, pmasks, title='mask')
-          RX = denormalize(mae.recover_masked(normalize(AX), pmasks))
+          RX = denormalizer(mae.recover_masked(normalizer(AX), pmasks))
         else:
-          RX = denormalize(mae.cross_infer(normalize(AX), args.mae_split))
+          RX = denormalizer(mae.cross_infer(normalizer(AX), args.mae_split))
         if show: imshow_torch(AX, RX, title='mae')
         AX = RX
       
@@ -343,7 +344,7 @@ def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=N
         if args.show: imshow_torch(X, AX, title='atk')
         if dfn: AX, Y = dfn.forward_show(AX, Y, args.show)
 
-        pred = model(normalize(AX)).argmax(dim=-1)
+        pred = model(normalizer(AX)).argmax(dim=-1)
         succ |= (pred != Y)
 
         if i % args.log_interval == 0: print(f'asr: {succ.sum()/ len(succ):.3%}')
@@ -353,7 +354,7 @@ def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=N
       correct += (~succ).sum()
 
     else:   # no atk
-      pred = model(normalize(X)).argmax(dim=-1)
+      pred = model(normalizer(X)).argmax(dim=-1)
       correct += (pred == Y).sum()
 
     total += len(pred)
@@ -381,7 +382,7 @@ def go(args):
 if __name__ == '__main__':
   parser = ArgumentParser()
   # model & data
-  parser.add_argument('-M', '--model',      default='resnet50', choices=TORCHVISION_MODELS, help='model to attack')
+  parser.add_argument('-M', '--model',      default='resnet50', help='model to attack')
   parser.add_argument('-D', '--dataset',    default='imagenet', choices=DATASETS)
   parser.add_argument('-B', '--batch_size', default=16, type=int, help='batch size')
   parser.add_argument('-L', '--limit',      default=-1, type=int, help='limit run sample count')
@@ -412,12 +413,20 @@ if __name__ == '__main__':
   parser.add_argument('--log_interval', default=100, type=int)
   args = parser.parse_args()
 
+  if args.dataset == 'cifar10':
+    assert args.model in PYTORCH_CIFAR10_MODELS, f'model must choose from {PYTORCH_CIFAR10_MODELS}'
+  else:
+    assert args.model in TORCHVISION_MODELS, f'model must choose from {TORCHVISION_MODELS}'
+
   assert 0.0 < args.ratio < 1.0
   assert 0 < args.mae_split <= 36
   assert 0 <= args.ip_idx <= 9
   if args.limit > 0: assert args.limit % args.batch_size == 0, '--limit should be dividable by --batch_size'
 
   args.scale = np.sqrt(args.ratio)   # area to side
-  threshold = args.mae_thresh/MAE_PATCH_SIZE**2
+  threshold = args.mae_thresh / MAE_PATCH_SIZE ** 2
+
+  normalizer   = partial(normalize,   args.dataset)
+  denormalizer = partial(denormalize, args.dataset)
 
   go(args)

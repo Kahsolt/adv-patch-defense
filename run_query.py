@@ -7,8 +7,8 @@ import lzma
 import random
 import pickle as pkl
 from pathlib import Path
+from functools import partial
 from argparse import ArgumentParser
-from typing import List
 
 import numpy as np
 from torch.nn import AvgPool2d
@@ -23,13 +23,6 @@ from data import *
 from model import *
 from utils import *
 
-if 'repos':
-  import sys
-  sys.path.append('repo/ImageNet-Patch')
-  from transforms.apply_patch import ApplyPatch
-  IP_FILE = "repo/ImageNet-Patch/assets/imagenet_patch.gz"
-
-BASE_PATH = Path(__file__).parent
 LOG_PATH = BASE_PATH / 'log' ; LOG_PATH.mkdir(exist_ok=True)
 
 
@@ -65,7 +58,7 @@ def get_expname(args) -> str:
 def saliency_map(model:Module, X:Tensor, Y:Tensor) -> np.ndarray:
   assert X.shape[0] == len(Y) == 1
   X.requires_grad = True
-  logits = model(normalize(X))
+  logits = model(normalizer(X))
   loss = F.cross_entropy(logits, Y, reduction='none')
   g = grad(loss, X, loss)[0]      # [B, H, W]
   g = g.abs().max(dim=1).values   # [B, C, H, W]
@@ -90,7 +83,7 @@ def grid_query(model:Module, X:Tensor, Y:Tensor, P:Tensor) -> List[np.ndarray]:
     assert len(batch_AX) == len(batch_idx) 
 
     AX = torch.concat(batch_AX, dim=0)
-    logit = model(normalize(AX))
+    logit = model(normalizer(AX))
     prob  = F.softmax(logit, dim=-1)
     loss  = F.cross_entropy(logit, Y.expand([AX.shape[0]]), reduction='none')
     pred  = logit.argmax(dim=-1)
@@ -137,7 +130,7 @@ def rand_query(args, model:Module, X:Tensor, Y:Tensor, P:Tensor) -> Tuple[bool, 
     AX = X.clone()
     AX[:, :, x:x+pH, y:y+pW] = P
 
-    pred = model(normalize(AX)).argmax(dim=-1)[0].item()
+    pred = model(normalizer(AX)).argmax(dim=-1)[0].item()
     imgs.append(tensor_to_plt(AX, title=f'query={cnt}; truth={truth}, pred={pred}'))
     if pred != truth: break
     cnt += 1
@@ -160,7 +153,7 @@ def heur_query(args, model:Module, X:Tensor, Y:Tensor, P:Tensor) -> Tuple[bool, 
     visited.add((x, y))
     AX = X.clone()
     AX[:, :, x:x+pH, y:y+pW] = P
-    logits = model(normalize(AX))
+    logits = model(normalizer(AX))
     pred = logits.argmax(dim=-1)[0].item()
     imgs.append(tensor_to_plt(AX, title=f'query={cnt}; truth={truth}, pred={pred}'))
     loss = F.cross_entropy(logits, Y).item()
@@ -252,7 +245,7 @@ def heur_query(args, model:Module, X:Tensor, Y:Tensor, P:Tensor) -> Tuple[bool, 
 def run(args, model:Module, X:Tensor, Y:Tensor, P:Tensor):
   with torch.inference_mode():
     y: int = Y[0].item()
-    y_hat: int = model(normalize(X)).argmax(dim=-1)[0].item()
+    y_hat: int = model(normalizer(X)).argmax(dim=-1)[0].item()
     print(f'>> truth: {y}, raw_pred: {y_hat}')
 
   if args.mode == 'attack':
@@ -317,13 +310,15 @@ def go(args):
 
   ip_idx_ls = range(10) if args.ip_idx_all else [args.ip_idx]
   for ip_idx in ip_idx_ls:
+    print(f'>> apply patch {ip_idx} ...')
+    
     patch: Tensor = patches[ip_idx].unsqueeze(0).to(device)   # [B=1, C=3, H=224, W=224]
     B, C, H, W = patch.shape
     x, y = (H - patch_size) // 2, (W - patch_size) // 2
     patch = patch[:, :, x:x+patch_size, y:y+patch_size]       # [B=1, C=3, H=50, W=50], center crop out the real patch
     P = F.interpolate(patch, size=(args.patch_size, args.patch_size), mode='nearest')
 
-    dataloader = get_dataloader(bs=1)
+    dataloader = get_dataloader(args.dataset, batch_size=1)
     if args.idx_all:
       for i, (X, Y) in enumerate(dataloader):
         print(f'[{i} / {len(dataloader)}]')
@@ -340,15 +335,26 @@ def go(args):
 
 if __name__ == '__main__':
   parser = ArgumentParser()
-  parser.add_argument('-F', '--mode',  default='attack', choices=['attack', 'grid'], help='simulate attacks or make grid query data')
-  parser.add_argument('-M', '--model', default='resnet50', choices=TORCHVISION_MODELS, help='model to attack')
-  parser.add_argument('--batch_size',  default=512,      type=int,  help='patch attack query batch size')
-  parser.add_argument('--patch_size',  default=7,        type=int,  help='attack patch size, set 7 for 32x32 and 50 for 224x224 (typical area ratio 5%)')
-  parser.add_argument('--idx',         default=0,        type=int,  help='run test image sample index')
-  parser.add_argument('--idx_all',     action='store_true',         help='run all test images')
-  parser.add_argument('--ip_idx',      default=0,        type=int,  help='run ImageNet-patch index (range 0 ~ 9)')
-  parser.add_argument('--ip_idx_all',  action='store_true',         help='run all ImageNet-patches')
-  parser.add_argument('--out_path',    default=LOG_PATH, type=Path, help='out data path')
+  parser.add_argument('-F', '--mode',    default='attack',   choices=['attack', 'grid'], help='simulate attacks or make grid query data')
+  parser.add_argument('-M', '--model',   default='resnet50', help='model to attack')
+  parser.add_argument('-D', '--dataset', default='imagenet', choices=DATASETS)
+  parser.add_argument('--query',         default=500,      type=int,  help='attack query count limit')
+  parser.add_argument('--hq_alpha',      default=2,        type=int,  help='heur_query shift step size')
+  parser.add_argument('--batch_size',    default=512,      type=int,  help='grid query batch size')
+  parser.add_argument('--patch_size',    default=50,       type=int,  help='attack patch size, set 7 for 32x32 and 50 for 224x224 (typical area ratio 5%)')
+  parser.add_argument('--idx',           default=0,        type=int,  help='run test image sample index')
+  parser.add_argument('--idx_all',       action='store_true',         help='run all test images')
+  parser.add_argument('--ip_idx',        default=0,        type=int,  help='run ImageNet-patch index (range 0 ~ 9)')
+  parser.add_argument('--ip_idx_all',    action='store_true',         help='run all ImageNet-patches')
+  parser.add_argument('--out_path',      default=LOG_PATH, type=Path, help='out data path')
   args = parser.parse_args()
+
+  if args.dataset == 'cifar10':
+    assert args.model in PYTORCH_CIFAR10_MODELS, f'model must choose from {PYTORCH_CIFAR10_MODELS}'
+  else:
+    assert args.model in TORCHVISION_MODELS, f'model must choose from {TORCHVISION_MODELS}'
+
+  normalizer   = partial(normalize,   args.dataset)
+  denormalizer = partial(denormalize, args.dataset)
 
   go(args)

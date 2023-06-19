@@ -15,6 +15,7 @@ import torch
 from torch import Tensor
 from torch.nn import Module
 
+BASE_PATH = Path(__file__).parent
 REPO_PATH = Path('repo')
 if 'repo':
   PYTORCH_CIFAR10_PATH = REPO_PATH / 'PyTorch_CIFAR10'
