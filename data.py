@@ -6,14 +6,15 @@ import os
 import json
 from PIL import Image
 
+import numpy as np
+import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
 from torchvision.datasets import CIFAR10
 import torchvision.transforms.functional as TF
 from torchvision.utils import make_grid
-import numpy as np
-import matplotlib.pyplot as plt
 
 from utils import *
+
 
 DATASET_STATS = {
   'imagenet': [
