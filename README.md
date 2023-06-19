@@ -38,7 +38,7 @@ A: modify `mae/util/pos_embed.py:56`, change `np.float` to `np.float32`
 
 ### quick start
 
-- run `repo/init_repos_mini.cmd`
+- run `repo/init_repos.cmd`
 - download [MAE weights](https://dl.fbaipublicfiles.com/mae/visualize/mae_visualize_vit_large_ganloss.pth) to `repo/mae/models`
 - download test data [ImageNet-1k]()
 - run clean test: `python run_adv_patch.py`
