@@ -9,27 +9,21 @@ from argparse import ArgumentParser
 from tqdm import tqdm
 from torch.nn import Module, CrossEntropyLoss, AvgPool2d
 from torch.autograd import Function as TorchFunction
-
-if 'repos':
-  import sys
-  sys.path.append('repo/ImageNet-Patch')
-  from transforms.apply_patch import ApplyPatch
-  PACTCH_FILE = "repo/ImageNet-Patch/assets/imagenet_patch.gz"
-  sys.path.append('repo/adversarial-robustness-toolbox')
-  from art.estimators.classification import PyTorchClassifier
-  from art.attacks.evasion import AdversarialPatchPyTorch
-  from art.defences.preprocessor.preprocessor import PreprocessorPyTorch
-  sys.path.append('repo/SegmentAndComplete')
-  from patch_detector import PatchDetector
-  SAC_CKPT = "repo/SegmentAndComplete/ckpts/coco_at.pth"
-  sys.path.append('repo/mae')
-  from models_mae import MaskedAutoencoderViT, mae_vit_large_patch16
-  MAE_PATCH_SIZE = 16
-  MAE_CKPT = "repo/mae/models/mae_visualize_vit_large_ganloss.pth"
+from art.estimators.classification import PyTorchClassifier
+from art.attacks.evasion import AdversarialPatchPyTorch
+from art.defences.preprocessor.preprocessor import PreprocessorPyTorch
 
 from data import *
 from model import *
 from utils import *
+
+if 'repos':
+  sys.path.append(str(IP_PATH))
+  from transforms.apply_patch import ApplyPatch
+  sys.path.append(str(SAC_PATH))
+  from patch_detector import PatchDetector
+  sys.path.append(str(MAE_PATH))
+  from models_mae import MaskedAutoencoderViT, mae_vit_large_patch16
 
 
 class ThresholdSTEFunction(TorchFunction):
@@ -243,7 +237,7 @@ def get_ap(args, clf:Module) -> AdversarialPatchPyTorch:
 
 def get_ip(args) -> AdversarialPatchPyTorch:
   import gzip, pickle
-  with gzip.open(PACTCH_FILE, 'rb') as f:
+  with gzip.open(IP_FILE, 'rb') as f:
     patches, targets, info = pickle.load(f)
   patch_size: int = info['patch_size']
   patch: Tensor = patches[args.ip_idx]    # 224 x 224 的画布中心有个 50 x 50 的 patch

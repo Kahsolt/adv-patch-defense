@@ -27,7 +27,7 @@ if 'repos':
   import sys
   sys.path.append('repo/ImageNet-Patch')
   from transforms.apply_patch import ApplyPatch
-  PACTCH_FILE = "repo/ImageNet-Patch/assets/imagenet_patch.gz"
+  IP_FILE = "repo/ImageNet-Patch/assets/imagenet_patch.gz"
 
 BASE_PATH = Path(__file__).parent
 LOG_PATH = BASE_PATH / 'log' ; LOG_PATH.mkdir(exist_ok=True)
@@ -311,7 +311,7 @@ def go(args):
   model = get_model(args.model).to(device)
   model.eval()
 
-  with gzip.open(PACTCH_FILE, 'rb') as f:
+  with gzip.open(IP_FILE, 'rb') as f:
     patches, targets, info = pkl.load(f)
   patch_size: int = info['patch_size']
 

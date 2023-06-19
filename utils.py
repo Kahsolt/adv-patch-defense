@@ -2,6 +2,9 @@
 # Author: Armit
 # Create Time: 2022/09/27 
 
+import sys
+from pathlib import Path
+
 from time import time
 from typing import *
 import warnings ; warnings.filterwarnings("ignore", category=UserWarning)
@@ -11,6 +14,20 @@ import numpy as np
 import torch
 from torch import Tensor
 from torch.nn import Module
+
+REPO_PATH = Path('repo')
+if 'repo':
+  PYTORCH_CIFAR10_PATH = REPO_PATH / 'PyTorch_CIFAR10'
+  
+  IP_PATH = REPO_PATH / 'ImageNet-Patch'
+  IP_FILE = IP_PATH / 'assets' / 'imagenet_patch.gz'
+
+  SAC_PATH = REPO_PATH / 'SegmentAndComplete'
+  SAC_CKPT = SAC_PATH / 'ckpts' / 'coco_at.pth'
+
+  MAE_PATH = REPO_PATH / 'mae'
+  MAE_CKPT = MAE_PATH / 'models' / 'mae_visualize_vit_large_ganloss.pth'
+  MAE_PATCH_SIZE = 16
 
 seed = 114514
 npimg = np.ndarray

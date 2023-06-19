@@ -9,7 +9,6 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
-from torchvision.datasets import CIFAR10
 import torchvision.transforms.functional as TF
 from torchvision.utils import make_grid
 
@@ -56,19 +55,35 @@ class ImageNet_1k(Dataset):
 
 
 def get_dataloader(name:str, split:str='test', batch_size:int=32) -> DataLoader:
+  assert split in ['train', 'val', 'test']
   is_train = split == 'train'
-  if   name == 'imagenet': dataset = ImageNet_1k(root='data/imagenet-1k', transform=TF.to_tensor)
-  elif name == 'cifar10':  dataset = CIFAR10(root='data', train=is_train, transform=TF.to_tensor, download=True)
-  else: raise ValueError(f'[get_dataloader] unknown dataset {name}')
-  return DataLoader(dataset, batch_size=batch_size, shuffle=is_train, pin_memory=False, num_workers=0)
+  
+  if name == 'imagenet':
+    assert split == 'test', 'imagenet-k only has test set'
+    dataset = ImageNet_1k(root='data/imagenet-1k', transform=TF.to_tensor)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=is_train, pin_memory=False, num_workers=0)
+  
+  elif name == 'cifar10':
+    from argparse import Namespace
+    args = Namespace(
+      data_dir='data',
+      batch_size=batch_size,
+      num_workers=0,
+    )
+    sys.path.insert(0, str(PYTORCH_CIFAR10_PATH))
+    try:
+      from data import CIFAR10Data
+      return getattr(CIFAR10Data(args), f'{split}_dataloader')()
+    except: raise
+    finally:
+      sys.path.pop(0)
 
-
-def normalize(X: Tensor, dataset: str) -> Tensor:
+def normalize(X:Tensor, dataset:str) -> Tensor:
   ''' NOTE: to insure attack validity, normalization is delayed until model feed '''
   avg, std = DATASET_STATS[dataset]
   return TF.normalize(X, avg, std)       # [B, C, H, W]
 
-def denormalize(X: Tensor, dataset: str) -> Tensor:
+def denormalize(X:Tensor, dataset:str) -> Tensor:
   avg, std = DATASET_STATS[dataset]
   avg = Tensor(list(avg)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)
   std = Tensor(list(std)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)
