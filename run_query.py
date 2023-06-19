@@ -282,10 +282,10 @@ def run(args, model:Module, X:Tensor, Y:Tensor, P:Tensor):
       plt.tight_layout()
       fp = args.out_path / f'{savename}.png'
       plt.savefig(fp, dpi=600)
-      print(f'>> save figure to {fp}')
+      print(f'>> save figure to {fp.name}')
 
       fp = args.out_path / f'{savename}.xz.pkl'
-      print(f'>> save results to {fp}')
+      print(f'>> save results to {fp.name}')
       with lzma.open(fp, 'wb') as fh:
         pkl.dump({
           'truth':  y,
@@ -326,6 +326,7 @@ def go(args):
         Y = Y.to(device)
         run(args, model, X, Y, P)
     else:
+      print(f'[idx={args.idx}]')
       for i, (X, Y) in enumerate(dataloader):
         if i >= args.idx: break
       X = X.to(device)
@@ -341,7 +342,7 @@ if __name__ == '__main__':
   parser.add_argument('--query',         default=500,      type=int,  help='attack query count limit')
   parser.add_argument('--hq_alpha',      default=2,        type=int,  help='heur_query shift step size')
   parser.add_argument('--batch_size',    default=512,      type=int,  help='grid query batch size')
-  parser.add_argument('--patch_size',    default=50,       type=int,  help='attack patch size, set 7 for 32x32 and 50 for 224x224 (typical area ratio 5%)')
+  parser.add_argument('--patch_size',    default=0,        type=int,  help='attack patch size, default 7 for 32x32 and 50 for 224x224 (typical area ratio 5%)')
   parser.add_argument('--idx',           default=0,        type=int,  help='run test image sample index')
   parser.add_argument('--idx_all',       action='store_true',         help='run all test images')
   parser.add_argument('--ip_idx',        default=0,        type=int,  help='run ImageNet-patch index (range 0 ~ 9)')
@@ -351,8 +352,15 @@ if __name__ == '__main__':
 
   if args.dataset == 'cifar10':
     assert args.model in PYTORCH_CIFAR10_MODELS, f'model must choose from {PYTORCH_CIFAR10_MODELS}'
+    args.n_class = 10
+    args.img_size = 32
+    args.patch_size = args.patch_size or 7
   else:
     assert args.model in TORCHVISION_MODELS, f'model must choose from {TORCHVISION_MODELS}'
+    args.n_class = 1000
+    args.img_size = 224
+    args.patch_size = args.patch_size or 50
+  args.scale = args.patch_size / args.img_size   # side
 
   normalizer   = partial(normalize,   args.dataset)
   denormalizer = partial(denormalize, args.dataset)

@@ -22,6 +22,7 @@ PYTORCH_CIFAR10_MODELS = sorted([fp.stem for fp in PYTORCH_CIFAR10_CKPT_PATH.ite
 
 def get_model_pytorch_cifar10(name:str) -> Module:
   assert PYTORCH_CIFAR10_PATH.is_dir(), 'Kahsolt/PyTorch_CIFAR10 not found under repo folder, forgot to run `init_repos.cmd`?'
+  if str(PYTORCH_CIFAR10_PATH) not in sys.path: sys.path.append(str(PYTORCH_CIFAR10_PATH))
   from module import all_classifiers
   model: Module = all_classifiers[name]()
   fp = PYTORCH_CIFAR10_CKPT_PATH / (name + '.pt')

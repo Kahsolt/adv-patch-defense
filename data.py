@@ -9,6 +9,7 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset, DataLoader
+from torchvision.datasets import CIFAR10
 import torchvision.transforms.functional as TF
 from torchvision.utils import make_grid
 
@@ -16,17 +17,16 @@ from utils import *
 
 
 DATASET_STATS = {
-  'imagenet': [
+  'imagenet': (
     (0.485, 0.456, 0.406),  # mean
     (0.229, 0.224, 0.225),  # var
-  ],
-  'cifar10': [
+  ),
+  'cifar10': (
     (0.4914, 0.4822, 0.4465),
     (0.2471, 0.2435, 0.2616),
-  ]
+  ),
 }
 DATASETS = list(DATASET_STATS.keys())
-
 
 class ImageNet_1k(Dataset):
 
@@ -61,32 +61,28 @@ def get_dataloader(name:str, split:str='test', batch_size:int=32) -> DataLoader:
   if name == 'imagenet':
     assert split == 'test', 'imagenet-k only has test set'
     dataset = ImageNet_1k(root='data/imagenet-1k', transform=TF.to_tensor)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=is_train, pin_memory=False, num_workers=0)
-  
   elif name == 'cifar10':
-    from argparse import Namespace
-    args = Namespace(
-      data_dir='data',
-      batch_size=batch_size,
-      num_workers=0,
-    )
-    sys.path.insert(0, str(PYTORCH_CIFAR10_PATH))
-    try:
-      from data import CIFAR10Data
-      return getattr(CIFAR10Data(args), f'{split}_dataloader')()
-    except: raise
-    finally:
-      sys.path.pop(0)
+    dataset = CIFAR10(root='data', train=is_train, transform=TF.to_tensor, download=True)
+  return DataLoader(dataset, batch_size=batch_size, shuffle=is_train, pin_memory=False, num_workers=0)
+
+
+DATASET_STATS_CACHE = { }
+
+@torch.inference_mode(False)
+def _make_stats_cache(dataset:str):
+  avg, std = DATASET_STATS[dataset]
+  avg = Tensor(list(avg)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(device)
+  std = Tensor(list(std)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(device)
+  DATASET_STATS_CACHE[dataset] = avg, std
 
 def normalize(dataset:str, X:Tensor) -> Tensor:
-  ''' NOTE: to insure attack validity, normalization is delayed until model feed '''
-  avg, std = DATASET_STATS[dataset]
+  if dataset not in DATASET_STATS_CACHE: _make_stats_cache(dataset)
+  avg, std = DATASET_STATS_CACHE[dataset]
   return TF.normalize(X, avg, std)       # [B, C, H, W]
 
 def denormalize(dataset:str, X:Tensor) -> Tensor:
-  avg, std = DATASET_STATS[dataset]
-  avg = Tensor(list(avg)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)
-  std = Tensor(list(std)).unsqueeze(0).unsqueeze(-1).unsqueeze(-1).to(X.device)
+  if dataset not in DATASET_STATS_CACHE: _make_stats_cache(dataset)
+  avg, std = DATASET_STATS_CACHE[dataset]
   return X * std + avg
 
 

@@ -4,6 +4,7 @@
 
 import sys
 from pathlib import Path
+import gc
 
 from time import time
 from typing import *
@@ -17,6 +18,7 @@ from torch.nn import Module
 
 BASE_PATH = Path(__file__).parent
 REPO_PATH = Path('repo')
+
 if 'repo':
   PYTORCH_CIFAR10_PATH = REPO_PATH / 'PyTorch_CIFAR10'
   
@@ -49,15 +51,22 @@ def perf_count(fn):
     if device == 'cuda':
       torch.cuda.reset_peak_memory_stats()
       torch.cuda.ipc_collect()
+      torch.cuda.empty_cache()
 
     t = time()
     r = fn(*args, **kwargs)
-    print(f'>> done in {time() - t:.3f}s')
+    print(f'>> [Timer] done in {time() - t:.3f}s')
 
     if device == 'cuda':
-      alloc = torch.cuda.max_memory_allocated() // 2**20
-      resrv = torch.cuda.max_memory_reserved()  // 2**20
-      print(f'[vram] alloc: {alloc} MB, resrv: {resrv} MB')
+      alloc = torch.cuda.max_memory_allocated() / 2**20
+      resrv = torch.cuda.max_memory_reserved()  / 2**20
+      print(f'>> [VRAM] alloc: {alloc:.3f} MB, resrv: {resrv:.3f} MB')
 
     return r
   return wrapper
+
+
+def gc_all():
+  gc.collect()
+  if device == 'cuda':
+    torch.cuda.ipc_collect()

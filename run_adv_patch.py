@@ -2,13 +2,13 @@
 # Author: Armit
 # Create Time: 2023/04/24 
 
-from time import time
 from argparse import ArgumentParser
 from functools import partial
 from types import MethodType
 
 from tqdm import tqdm
 from torch.nn import Module, CrossEntropyLoss, AvgPool2d
+import torch.nn.functional as F
 from torch.autograd import Function as TorchFunction
 from art.estimators.classification import PyTorchClassifier
 from art.attacks.evasion import AdversarialPatchPyTorch
@@ -40,12 +40,13 @@ class ThresholdSTEFunction(TorchFunction):
 
 ''' concrete DFN & ATK '''
 
-def get_sac() -> PatchDetector:
-  sac = PatchDetector(3, 1, base_filter=16, square_sizes=[100, 75, 50, 25], n_patch=1)
+def get_sac(args) -> PatchDetector:
+  ps = args.patch_size
+  sac = PatchDetector(3, 1, base_filter=16, square_sizes=[int(ps*1.5), ps, ps//2], n_patch=1)
   sac.unet.load_state_dict(torch.load(SAC_CKPT, map_location=device))
   return sac.eval().to(device)
 
-def get_mae() -> MaskedAutoencoderViT:
+def get_mae(args) -> MaskedAutoencoderViT:
   mae = mae_vit_large_patch16()
   mae.load_state_dict(torch.load(MAE_CKPT, map_location=device)['model'])
   mae = mae.eval().to(device)
@@ -228,7 +229,7 @@ def get_ap(args, clf:Module) -> AdversarialPatchPyTorch:
     learning_rate=learning_rate,
     max_iter=args.ap_iter,
     batch_size=args.batch_size,
-    patch_shape=(3, 224, 224),
+    patch_shape=(3, args.patch_size, args.patch_size),
     patch_location=None,
     patch_type=args.ap_shape,
     targeted=False,
@@ -241,8 +242,8 @@ def get_ip(args) -> AdversarialPatchPyTorch:
   with gzip.open(IP_FILE, 'rb') as f:
     patches, targets, info = pickle.load(f)
   patch_size: int = info['patch_size']
-  patch: Tensor = patches[args.ip_idx]    # 224 x 224 的画布中心有个 50 x 50 的 patch
-  scale: float = 224 * args.scale / patch_size
+  patch: Tensor = patches[args.ip_idx]    # 224x224 的黑色画布中心有个 50x50 的 patch
+  scale: float = args.patch_size / patch_size
 
   apply_patch = ApplyPatch(
     patch,
@@ -263,8 +264,8 @@ def get_ip(args) -> AdversarialPatchPyTorch:
 ''' abstract DFN & ATK '''
 
 def get_dfn(args) -> PreprocessorPyTorch:
-  sac = get_sac() if args.sac else None
-  mae = get_mae() if args.mae else None
+  sac = get_sac(args) if args.sac else None
+  mae = get_mae(args) if args.mae else None
   if not any([sac, mae]): return None
 
   class Defenser(PreprocessorPyTorch):
@@ -272,9 +273,17 @@ def get_dfn(args) -> PreprocessorPyTorch:
     AVG_POOL = AvgPool2d(MAE_PATCH_SIZE, MAE_PATCH_SIZE)
 
     def forward(self, AX:Tensor, Y:Tensor) -> Tuple[Tensor, Tensor]:
-      return self.forward_show(AX, Y)
+      return self.forward_show(AX, Y, show=False)
     
-    def forward_show(self, AX:Tensor, Y:Tensor, show:bool=False) -> Tuple[Tensor, Tensor]:
+    def forward_show(self, AX:Tensor, Y:Tensor, show:bool=True) -> Tuple[Tensor, Tensor]:
+      if 'resize':
+        B, C, H, W = AX.shape
+        if not (H == W == 224):
+          AX = F.interpolate(AX, size=(224, 224), mode='nearest')
+          resized = True
+        else:
+          resized = False
+
       if sac:
         # `mask` is a round-corner rectangle when `shape_completion=True`; values are binarized to {0, 1}
         # `bpda` enables gradient bypassing
@@ -294,7 +303,11 @@ def get_dfn(args) -> PreprocessorPyTorch:
           RX = denormalizer(mae.cross_infer(normalizer(AX), args.mae_split))
         if show: imshow_torch(AX, RX, title='mae')
         AX = RX
-      
+
+      if 'unresize':
+        if resized:
+          RX = F.interpolate(RX, size=(H, W), mode='nearest')
+
       return RX, Y
 
   return Defenser()
@@ -306,8 +319,8 @@ def get_atk(args, model:Module, dfn:PreprocessorPyTorch=None) -> AdversarialPatc
   clf = PyTorchClassifier(
     model=model,
     loss=CrossEntropyLoss(),
-    input_shape=(224, 224, 3),
-    nb_classes=1000,
+    input_shape=(args.img_size, args.img_size, 3),
+    nb_classes=args.n_class,
     optimizer=None,
     clip_values=(0.0, 1.0),
     preprocessing_defences=dfn,
@@ -322,61 +335,72 @@ def get_atk(args, model:Module, dfn:PreprocessorPyTorch=None) -> AdversarialPatc
 
 @torch.no_grad()
 def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=None, dfn:PreprocessorPyTorch=None) -> float:
-  total, correct = 0, 0
+  def run_one_batch(X:Tensor, Y:Tensor):
+    nonlocal total, correct
 
-  model.eval()
-  for X, Y in tqdm(dataloader):
-    X = X.to(device)
-    Y = Y.to(device)
-
-    if atk:
-      # optimize generation
-      with torch.enable_grad():
-        X_np = X.cpu().numpy()
-        Y_np = Y.cpu().numpy()
-        P_np, M_np = atk.generate(X_np, Y_np)
-        if args.show: imshow_torch(torch.from_numpy(P_np), torch.from_numpy(M_np), title='adv-patch')
-
-      # random application
-      succ = torch.zeros_like(Y).bool()   # 允许查询次数内有一次攻击成功就算成功
-      for i in range(args.query):
-        AX = torch.from_numpy(atk.apply_patch(X_np, args.scale)).to(device)
-        if args.show: imshow_torch(X, AX, title='atk')
-        if dfn: AX, Y = dfn.forward_show(AX, Y, args.show)
-
-        pred = model(normalizer(AX)).argmax(dim=-1)
-        succ |= (pred != Y)
-
-        if i % args.log_interval == 0: print(f'asr: {succ.sum()/ len(succ):.3%}')
-        if succ.all(): break    # stop early
-
-      if args.show_adv: imshow_torch(X, AX, title='atk')
-      correct += (~succ).sum()
-
-    else:   # no atk
+    if not atk:
       pred = model(normalizer(X)).argmax(dim=-1)
       correct += (pred == Y).sum()
+      total += len(pred)
+      return
 
+    # adv generation
+    with torch.enable_grad():
+      X_np = X.cpu().numpy()
+      Y_np = Y.cpu().numpy()
+      P_np, M_np = atk.generate(X_np, Y_np)
+      if args.show: imshow_torch(torch.from_numpy(P_np), torch.from_numpy(M_np), title='adv-patch')
+
+    # random query
+    succ = torch.zeros_like(Y).bool()   # 允许查询次数内有一次攻击成功就算成功
+    for i in range(args.query):
+      AX = torch.from_numpy(atk.apply_patch(X_np, args.scale)).to(device)
+      if args.show: imshow_torch(X, AX, title='atk')
+      if dfn: AX, Y = dfn.forward_show(AX, Y, args.show)
+
+      pred = model(normalizer(AX)).argmax(dim=-1)
+      succ |= (pred != Y)
+
+      if i % args.log_interval == 0: print(f'[query {i} / {args.query}] asr: {succ.sum()/ len(succ):.3%}')
+      if succ.all(): break    # stop early
+
+    if args.show_adv: imshow_torch(X, AX, title='atk')
+    correct += (~succ).sum().item()
     total += len(pred)
 
-    import gc ; gc.collect()
-    if device == 'cuda': torch.cuda.ipc_collect()
+    gc_all()    # do not know why :(
 
-    if args.limit > 0 and total >= args.limit: break
+  model.eval()
+  total, correct = 0, 0
 
-  return (correct / total).item()
+  if args.idx:      # run single image
+    X, Y = dataloader.dataset[args.idx]
+    X = X.unsqueeze(dim=0).to(device)
+    Y = Y.unsqueeze(dim=0).to(device)
+    run_one_batch(X, Y)
+  else:             # run total dataset
+    for X, Y in tqdm(dataloader):
+      if args.limit and total >= args.limit: break
+      X = X.to(device)
+      Y = Y.to(device)
+      run_one_batch(X, Y)
+
+  return correct / total
 
 
+@perf_count
 def go(args):
-  model = get_model(args.model).to(device)
-  dataloader = get_dataloader(args.batch_size)
+  if args.dataset == 'cifar10':
+    model = get_model_pytorch_cifar10(args.model).to(device)
+  else:
+    model = get_model(args.model).to(device)
+  dataloader = get_dataloader(args.dataset, split='test', batch_size=args.batch_size)
 
   dfn = get_dfn(args)
   atk = get_atk(args, model, dfn)
 
-  t = time()
   acc = run(args, model, dataloader, atk, dfn)
-  print(f'Accuracy: {acc:.3%} ({time() - t:.3f} s)')
+  print(f'Accuracy: {acc:.3%}')
 
 
 if __name__ == '__main__':
@@ -385,20 +409,21 @@ if __name__ == '__main__':
   parser.add_argument('-M', '--model',      default='resnet50', help='model to attack')
   parser.add_argument('-D', '--dataset',    default='imagenet', choices=DATASETS)
   parser.add_argument('-B', '--batch_size', default=16, type=int, help='batch size')
-  parser.add_argument('-L', '--limit',      default=-1, type=int, help='limit run sample count')
+  parser.add_argument('-L', '--limit',      default=0,  type=int, help='limit run sample count')
+  parser.add_argument('-I', '--idx',                    type=int, help='run sample index')
   # patch-like attacks common
-  parser.add_argument('--ratio', default=0.05, type=float, help='attack patch area ratio, typically 1%~5%')
-  parser.add_argument('--query', default=500,  type=int,   help='attack query time limit')
+  parser.add_argument('-S', '--patch_size', default=0,   type=int, help='attack patch size, default 7 for 32x32 and 50 for 224x224 (typical area ratio 5%)')
+  parser.add_argument('-Q', '--query',      default=500, type=int, help='attack query time limit')
   # adv-patch (attack)
-  parser.add_argument('--ap',   action='store_true', help='enable adv-patch attack')
+  parser.add_argument('--ap',       action='store_true', help='enable adv-patch attack')
   parser.add_argument('--ap_shape', default='square', choices=['circle', 'square'], help='patch shape')
   parser.add_argument('--ap_rot',   default=22.5, type=float, help='max patch rotation angle')
   parser.add_argument('--ap_pgd',   action='store_true',      help='optim method, pgd or simple Adam')
   parser.add_argument('--ap_iter',  default=100,  type=int,   help='optim iter')
   # ImageNet-patch (attack)
-  parser.add_argument('--ip',     action='store_true', help='enable ImageNet-patch attack')
-  parser.add_argument('--ip_idx', default=0,  type=int, help='which pre-gen patch to use (index range 0 ~ 9)')
-  parser.add_argument('--ip_rot', default=45, type=float, help='max patch rotation angle')
+  parser.add_argument('--ip',     action='store_true',     help='enable ImageNet-patch attack')
+  parser.add_argument('--ip_idx', default=0,   type=int,   help='which pre-gen patch to use (index range 0 ~ 9)')
+  parser.add_argument('--ip_rot', default=45,  type=float, help='max patch rotation angle')
   parser.add_argument('--ip_tx',  default=0.2, type=float, help='max patch translation fraction')
   # sac (defense)
   parser.add_argument('--sac',          action='store_true', help='enable SAC defense')
@@ -408,22 +433,28 @@ if __name__ == '__main__':
   parser.add_argument('--mae_split',  default=4, type=int, help='if w/o --sac, cross infer n_split')
   parser.add_argument('--mae_thresh', default=4, type=int, help='if w/ --sac, only mask those pathes with bad pixels count exceeding threshold')
   # debug
-  parser.add_argument('--show', action='store_true', help='show debug images')
+  parser.add_argument('--show',     action='store_true', help='show debug images')
   parser.add_argument('--show_adv', action='store_true', help='show final adv images')
-  parser.add_argument('--log_interval', default=100, type=int)
+  parser.add_argument('--log_interval', default=100, type=int, help='show ASR log during attack querying')
   args = parser.parse_args()
 
   if args.dataset == 'cifar10':
+    assert not args.ip, 'should not put --ip over cifar10 :('
     assert args.model in PYTORCH_CIFAR10_MODELS, f'model must choose from {PYTORCH_CIFAR10_MODELS}'
+    args.n_class = 10
+    args.img_size = 32
+    args.patch_size = args.patch_size or 7
   else:
     assert args.model in TORCHVISION_MODELS, f'model must choose from {TORCHVISION_MODELS}'
+    args.n_class = 1000
+    args.img_size = 224
+    args.patch_size = args.patch_size or 50
+  args.scale = args.patch_size / args.img_size   # side
 
-  assert 0.0 < args.ratio < 1.0
   assert 0 < args.mae_split <= 36
   assert 0 <= args.ip_idx <= 9
-  if args.limit > 0: assert args.limit % args.batch_size == 0, '--limit should be dividable by --batch_size'
+  if args.limit: assert args.limit % args.batch_size == 0, '--limit should be dividable by --batch_size'
 
-  args.scale = np.sqrt(args.ratio)   # area to side
   threshold = args.mae_thresh / MAE_PATCH_SIZE ** 2
 
   normalizer   = partial(normalize,   args.dataset)
