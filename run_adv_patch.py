@@ -27,6 +27,8 @@ if 'repos':
   MAE_PATCH_SIZE = 16
   MAE_CKPT = "repo/mae/models/mae_visualize_vit_large_ganloss.pth"
 
+from data import *
+from model import *
 from utils import *
 
 
@@ -315,7 +317,7 @@ def get_atk(args, model:Module, dfn:PreprocessorPyTorch=None) -> AdversarialPatc
     clip_values=(0.0, 1.0),
     preprocessing_defences=dfn,
     postprocessing_defences=None,
-    preprocessing=imagenet_stats(),   # normalize
+    preprocessing=DATASET_STATS[args.dataset],   # normalize
     device_type="gpu",
   )
   
@@ -385,7 +387,8 @@ def go(args):
 if __name__ == '__main__':
   parser = ArgumentParser()
   # model & data
-  parser.add_argument('-M', '--model',      default='resnet50', choices=MODELS, help='model to attack')
+  parser.add_argument('-M', '--model',      default='resnet50', choices=TORCHVISION_MODELS, help='model to attack')
+  parser.add_argument('-D', '--dataset',    default='imagenet', choices=DATASETS)
   parser.add_argument('-B', '--batch_size', default=16, type=int, help='batch size')
   parser.add_argument('-L', '--limit',      default=-1, type=int, help='limit run sample count')
   # patch-like attacks common
