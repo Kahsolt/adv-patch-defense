@@ -228,7 +228,7 @@ def get_ap(args, clf:Module) -> AdversarialPatchPyTorch:
     optimizer=optimizer,
     learning_rate=learning_rate,
     max_iter=args.ap_iter,
-    batch_size=args.batch_size,
+    batch_size=1,
     patch_shape=(3, args.patch_size, args.patch_size),
     patch_location=None,
     patch_type=args.ap_shape,
@@ -364,6 +364,8 @@ def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=N
       if i % args.log_interval == 0: print(f'[query {i} / {args.query}] asr: {succ.sum()/ len(succ):.3%}')
       if succ.all(): break    # stop early
 
+    print(f'[final {i}] asr: {succ.sum()/ len(succ):.3%}')
+    
     if args.show_adv: imshow_torch(X, AX, title='atk')
     correct += (~succ).sum().item()
     total += len(pred)
@@ -376,7 +378,7 @@ def run(args, model:Module, dataloader:DataLoader, atk:AdversarialPatchPyTorch=N
   if args.idx:      # run single image
     X, Y = dataloader.dataset[args.idx]
     X = X.unsqueeze(dim=0).to(device)
-    Y = Y.unsqueeze(dim=0).to(device)
+    Y = Tensor([Y]).long().unsqueeze(dim=0).to(device)
     run_one_batch(X, Y)
   else:             # run total dataset
     for X, Y in tqdm(dataloader):
@@ -394,11 +396,11 @@ def go(args):
     model = get_model_pytorch_cifar10(args.model).to(device)
   else:
     model = get_model(args.model).to(device)
-  dataloader = get_dataloader(args.dataset, split='test', batch_size=args.batch_size)
 
   dfn = get_dfn(args)
   atk = get_atk(args, model, dfn)
 
+  dataloader = get_dataloader(args.dataset, split='test', batch_size=(1 if atk else 32))
   acc = run(args, model, dataloader, atk, dfn)
   print(f'Accuracy: {acc:.3%}')
 
@@ -408,7 +410,6 @@ if __name__ == '__main__':
   # model & data
   parser.add_argument('-M', '--model',      default='resnet50', help='model to attack')
   parser.add_argument('-D', '--dataset',    default='imagenet', choices=DATASETS)
-  parser.add_argument('-B', '--batch_size', default=16, type=int, help='batch size')
   parser.add_argument('-L', '--limit',      default=0,  type=int, help='limit run sample count')
   parser.add_argument('-I', '--idx',                    type=int, help='run sample index')
   # patch-like attacks common
@@ -453,7 +454,6 @@ if __name__ == '__main__':
 
   assert 0 < args.mae_split <= 36
   assert 0 <= args.ip_idx <= 9
-  if args.limit: assert args.limit % args.batch_size == 0, '--limit should be dividable by --batch_size'
 
   threshold = args.mae_thresh / MAE_PATCH_SIZE ** 2
 
