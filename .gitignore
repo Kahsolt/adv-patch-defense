@@ -6,12 +6,12 @@ __pycache__/
 data/
 repo/*
 !repo/*.cmd
-ref/
+#ref/
 
 # generated
 gen/
 out/
 
 # logs
-log/
+#log/
 *.log
